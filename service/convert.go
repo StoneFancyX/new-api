@@ -207,9 +207,14 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 
 	var claudeResponses []*dto.ClaudeResponse
 	if info.SendResponseCount == 1 {
+		// Use original model name to hide actual upstream model from users
+		modelName := openAIResponse.Model
+		if info.IsModelMapped && info.OriginModelName != "" {
+			modelName = info.OriginModelName
+		}
 		msg := &dto.ClaudeMediaMessage{
 			Id:    openAIResponse.Id,
-			Model: openAIResponse.Model,
+			Model: modelName,
 			Type:  "message",
 			Role:  "assistant",
 			Usage: &dto.ClaudeUsage{

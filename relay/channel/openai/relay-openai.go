@@ -27,13 +27,21 @@ func sendStreamData(c *gin.Context, info *relaycommon.RelayInfo, data string, fo
 		return nil
 	}
 
-	if !forceFormat && !thinkToContent {
+	// Replace upstream model name with original model name if model is mapped
+	needReplaceModel := info.IsModelMapped && info.OriginModelName != ""
+
+	if !forceFormat && !thinkToContent && !needReplaceModel {
 		return helper.StringData(c, data)
 	}
 
 	var lastStreamResponse dto.ChatCompletionsStreamResponse
 	if err := common.UnmarshalJsonStr(data, &lastStreamResponse); err != nil {
 		return err
+	}
+
+	// Replace model name to hide actual upstream model from users
+	if needReplaceModel {
+		lastStreamResponse.Model = info.OriginModelName
 	}
 
 	if !thinkToContent {
@@ -253,15 +261,23 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 
+	// Replace upstream model name with original model name to hide actual model from users
+	if info.IsModelMapped && info.OriginModelName != "" {
+		simpleResponse.Model = info.OriginModelName
+	}
+
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if usageModified {
+		if usageModified || info.IsModelMapped {
 			var bodyMap map[string]interface{}
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			bodyMap["usage"] = simpleResponse.Usage
+			if info.IsModelMapped && info.OriginModelName != "" {
+				bodyMap["model"] = info.OriginModelName
+			}
 			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {
