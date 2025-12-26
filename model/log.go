@@ -56,8 +56,10 @@ func formatUserLogs(logs []*Log) {
 		var otherMap map[string]interface{}
 		otherMap, _ = common.StrToMap(logs[i].Other)
 		if otherMap != nil {
-			// delete admin
+			// delete admin info and upstream model name (should not be visible to normal users)
 			delete(otherMap, "admin_info")
+			delete(otherMap, "upstream_model_name")
+			delete(otherMap, "is_model_mapped")
 		}
 		logs[i].Other = common.MapToJsonStr(otherMap)
 		logs[i].Id = logs[i].Id % 1024
