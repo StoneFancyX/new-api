@@ -71,6 +71,17 @@ func SetRelayRouter(router *gin.Engine) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
 	}
+
+	// Wukong chat-stream 路由（无 /v1 前缀）
+	chatStreamRouter := router.Group("")
+	chatStreamRouter.Use(middleware.TokenAuth())
+	chatStreamRouter.Use(middleware.ModelRequestRateLimit())
+	chatStreamRouter.Use(middleware.Distribute())
+	{
+		chatStreamRouter.POST("/chat-stream", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatOpenAI)
+		})
+	}
 	{
 		//http router
 		httpRouter := relayV1Router.Group("")
