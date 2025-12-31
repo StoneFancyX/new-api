@@ -152,14 +152,14 @@ jobs:
 
       - name: Create & push manifest (GHCR - alpha)
         run: |
-          docker buildx imagetools create \
-            -t ghcr.io/${GHCR_REPOSITORY}:alpha \
-            ghcr.io/${GHCR_REPOSITORY}:alpha-amd64 \
-            ghcr.io/${GHCR_REPOSITORY}:alpha-arm64
+          # For single-arch builds, just retag the image
+          docker pull ghcr.io/${GHCR_REPOSITORY}:alpha-amd64
+          docker tag ghcr.io/${GHCR_REPOSITORY}:alpha-amd64 ghcr.io/${GHCR_REPOSITORY}:alpha
+          docker push ghcr.io/${GHCR_REPOSITORY}:alpha
 
       - name: Create & push manifest (GHCR - versioned alpha)
         run: |
-          docker buildx imagetools create \
-            -t ghcr.io/${GHCR_REPOSITORY}:${VERSION} \
-            ghcr.io/${GHCR_REPOSITORY}:${VERSION}-amd64 \
-            ghcr.io/${GHCR_REPOSITORY}:${VERSION}-arm64
+          # For single-arch builds, just retag the image
+          docker pull ghcr.io/${GHCR_REPOSITORY}:${VERSION}-amd64
+          docker tag ghcr.io/${GHCR_REPOSITORY}:${VERSION}-amd64 ghcr.io/${GHCR_REPOSITORY}:${VERSION}
+          docker push ghcr.io/${GHCR_REPOSITORY}:${VERSION}
