@@ -4,6 +4,20 @@ on:
   push:
     tags:
       - '*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the image (e.g., latest, v1.0.0, test-20250131)'
+        required: true
+        default: 'latest'
+      push_image:
+        description: 'Push image to registry'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   build_single_arch:
@@ -32,8 +46,12 @@ jobs:
 
       - name: Resolve tag & write VERSION
         run: |
-          git fetch --tags --force --depth=1
-          TAG=${GITHUB_REF#refs/tags/}
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          else
+            git fetch --tags --force --depth=1
+            TAG=${GITHUB_REF#refs/tags/}
+          fi
           echo "TAG=$TAG" >> $GITHUB_ENV
           echo "$TAG" > VERSION
           echo "Building tag: $TAG for ${{ matrix.arch }}"
@@ -63,7 +81,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            calciumion/new-api
+            stonefancyx/new-api
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}
 
       - name: Build & push single-arch (to both registries)
@@ -71,10 +89,10 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          push: true
+          push: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.push_image == 'true' || true }}
           tags: |
-            calciumion/new-api:${{ env.TAG }}-${{ matrix.arch }}
-            calciumion/new-api:latest-${{ matrix.arch }}
+            stonefancyx/new-api:${{ env.TAG }}-${{ matrix.arch }}
+            stonefancyx/new-api:latest-${{ matrix.arch }}
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}:${{ env.TAG }}-${{ matrix.arch }}
 #            ghcr.io/${{ env.GHCR_REPOSITORY }}:latest-${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -104,16 +122,16 @@ jobs:
       - name: Create & push manifest (Docker Hub - version)
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:${TAG} \
-            calciumion/new-api:${TAG}-amd64 \
-            calciumion/new-api:${TAG}-arm64
+            -t stonefancyx/new-api:${TAG} \
+            stonefancyx/new-api:${TAG}-amd64 \
+            stonefancyx/new-api:${TAG}-arm64
 
       - name: Create & push manifest (Docker Hub - latest)
         run: |
           docker buildx imagetools create \
-            -t calciumion/new-api:latest \
-            calciumion/new-api:latest-amd64 \
-            calciumion/new-api:latest-arm64
+            -t stonefancyx/new-api:latest \
+            stonefancyx/new-api:latest-amd64 \
+            stonefancyx/new-api:latest-arm64
 
       # ---- GHCR ----
 #      - name: Log in to GHCR
