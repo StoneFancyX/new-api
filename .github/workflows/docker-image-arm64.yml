@@ -29,9 +29,10 @@ jobs:
           - arch: amd64
             platform: linux/amd64
             runner: ubuntu-latest
-          - arch: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
+          # ARM runners require public repositories - disabled for private repos
+          # - arch: arm64
+          #   platform: linux/arm64
+          #   runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
 
     permissions:
@@ -121,17 +122,17 @@ jobs:
 
       - name: Create & push manifest (Docker Hub - version)
         run: |
-          docker buildx imagetools create \
-            -t stonefancyx/new-api:${TAG} \
-            stonefancyx/new-api:${TAG}-amd64 \
-            stonefancyx/new-api:${TAG}-arm64
+          # For single-arch builds, just retag the image
+          docker pull stonefancyx/new-api:${TAG}-amd64
+          docker tag stonefancyx/new-api:${TAG}-amd64 stonefancyx/new-api:${TAG}
+          docker push stonefancyx/new-api:${TAG}
 
       - name: Create & push manifest (Docker Hub - latest)
         run: |
-          docker buildx imagetools create \
-            -t stonefancyx/new-api:latest \
-            stonefancyx/new-api:latest-amd64 \
-            stonefancyx/new-api:latest-arm64
+          # For single-arch builds, just retag the image
+          docker pull stonefancyx/new-api:latest-amd64
+          docker tag stonefancyx/new-api:latest-amd64 stonefancyx/new-api:latest
+          docker push stonefancyx/new-api:latest
 
       # ---- GHCR ----
 #      - name: Log in to GHCR
