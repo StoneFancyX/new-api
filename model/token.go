@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,23 +12,27 @@ import (
 )
 
 type Token struct {
-	Id                 int            `json:"id"`
-	UserId             int            `json:"user_id" gorm:"index"`
-	Key                string         `json:"key" gorm:"type:char(48);uniqueIndex"`
-	Status             int            `json:"status" gorm:"default:1"`
-	Name               string         `json:"name" gorm:"index" `
-	CreatedTime        int64          `json:"created_time" gorm:"bigint"`
-	AccessedTime       int64          `json:"accessed_time" gorm:"bigint"`
-	ExpiredTime        int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
-	RemainQuota        int            `json:"remain_quota" gorm:"default:0"`
-	UnlimitedQuota     bool           `json:"unlimited_quota"`
-	ModelLimitsEnabled bool           `json:"model_limits_enabled"`
-	ModelLimits        string         `json:"model_limits" gorm:"type:varchar(1024);default:''"`
-	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
-	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
-	Group              string         `json:"group" gorm:"default:''"`
-	CrossGroupRetry    bool           `json:"cross_group_retry" gorm:"default:false"` // 跨分组重试，仅auto分组有效
-	DeletedAt          gorm.DeletedAt `gorm:"index"`
+	Id                    int            `json:"id"`
+	UserId                int            `json:"user_id" gorm:"index"`
+	Key                   string         `json:"key" gorm:"type:char(48);uniqueIndex"`
+	Status                int            `json:"status" gorm:"default:1"`
+	Name                  string         `json:"name" gorm:"index" `
+	CreatedTime           int64          `json:"created_time" gorm:"bigint"`
+	AccessedTime          int64          `json:"accessed_time" gorm:"bigint"`
+	ExpiredTime           int64          `json:"expired_time" gorm:"bigint;default:-1"` // -1 means never expired
+	RemainQuota           int            `json:"remain_quota" gorm:"default:0"`
+	UnlimitedQuota        bool           `json:"unlimited_quota"`
+	ModelLimitsEnabled    bool           `json:"model_limits_enabled"`
+	ModelLimits           string         `json:"model_limits" gorm:"type:varchar(1024);default:''"`
+	AllowIps              *string        `json:"allow_ips" gorm:"default:''"`
+	UsedQuota             int            `json:"used_quota" gorm:"default:0"` // used quota
+	Group                 string         `json:"group" gorm:"default:''"`
+	CrossGroupRetry       bool           `json:"cross_group_retry" gorm:"default:false"` // 跨分组重试，仅auto分组有效
+	RateLimitEnabled      bool           `json:"rate_limit_enabled" gorm:"default:false"`
+	RateLimitTotalCount   int            `json:"rate_limit_total_count" gorm:"default:0"`
+	RateLimitSuccessCount int            `json:"rate_limit_success_count" gorm:"default:0"`
+	RateLimitDuration     int            `json:"rate_limit_duration" gorm:"default:0"`
+	DeletedAt             gorm.DeletedAt `gorm:"index"`
 }
 
 func (token *Token) Clean() {
@@ -172,8 +177,27 @@ func (token *Token) Insert() error {
 	return err
 }
 
+// BeforeSave GORM hook for validation
+func (token *Token) BeforeSave(tx *gorm.DB) error {
+	// 验证速率限制字段有效性（无论是否启用都要验证）
+	if token.RateLimitTotalCount < 0 || token.RateLimitTotalCount > 10000 {
+		return errors.New("rate_limit_total_count must be between 0 and 10000")
+	}
+	if token.RateLimitSuccessCount < 0 || token.RateLimitSuccessCount > token.RateLimitTotalCount {
+		return errors.New("rate_limit_success_count must be between 0 and rate_limit_total_count")
+	}
+	if token.RateLimitDuration < 0 || token.RateLimitDuration > 1440 {
+		return errors.New("rate_limit_duration must be between 0 and 1440")
+	}
+	return nil
+}
+
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
+	// 检测是否从启用变为禁用
+	oldToken, _ := GetTokenById(token.Id)
+	shouldCleanRedis := oldToken != nil && oldToken.RateLimitEnabled && !token.RateLimitEnabled
+
 	defer func() {
 		if shouldUpdateRedis(true, err) {
 			gopool.Go(func() {
@@ -181,11 +205,20 @@ func (token *Token) Update() (err error) {
 				if err != nil {
 					common.SysLog("failed to update token cache: " + err.Error())
 				}
+				// 如果从启用变为禁用，清理 Redis Key
+				if shouldCleanRedis && common.RedisEnabled {
+					rdb := common.RDB
+					ctx := context.Background()
+					rdb.Del(ctx, fmt.Sprintf("rateLimit:token:%d", token.Id))
+					rdb.Del(ctx, fmt.Sprintf("rateLimit:token:%d:success", token.Id))
+					common.SysLog(fmt.Sprintf("Cleaned rate limit keys for token %d (disabled)", token.Id))
+				}
 			})
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry",
+		"rate_limit_enabled", "rate_limit_total_count", "rate_limit_success_count", "rate_limit_duration").Updates(token).Error
 	return err
 }
 
@@ -211,6 +244,16 @@ func (token *Token) Delete() (err error) {
 				err := cacheDeleteToken(token.Key)
 				if err != nil {
 					common.SysLog("failed to delete token cache: " + err.Error())
+				}
+
+				// 删除令牌时清理限流计数器
+				if common.RedisEnabled {
+					rdb := common.RDB
+					ctx := context.Background()
+					// 清理令牌级别的限流 Key
+					rdb.Del(ctx, fmt.Sprintf("rateLimit:token:%d", token.Id))
+					rdb.Del(ctx, fmt.Sprintf("rateLimit:token:%d:success", token.Id))
+					common.SysLog(fmt.Sprintf("Cleaned rate limit keys for token %d (deleted)", token.Id))
 				}
 			})
 		}

@@ -2,9 +2,8 @@ FROM oven/bun:latest AS builder
 
 WORKDIR /build
 COPY web/package.json .
-RUN touch bun.lockb || true
 COPY ./web .
-RUN bun install
+RUN rm -f bun.lockb && bun install
 COPY ./VERSION .
 RUN DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat VERSION) bun run build
 

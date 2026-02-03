@@ -149,6 +149,54 @@ func AddToken(c *gin.Context) {
 		})
 		return
 	}
+
+	// 验证速率限制配置 - 无论是否启用都要验证
+	if token.RateLimitTotalCount < 0 || token.RateLimitTotalCount > 10000 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "总请求数必须在 0-10000 之间",
+		})
+		return
+	}
+	if token.RateLimitSuccessCount < 0 || token.RateLimitSuccessCount > token.RateLimitTotalCount {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "成功请求数必须在 0 到总请求数之间",
+		})
+		return
+	}
+	if token.RateLimitDuration < 0 || token.RateLimitDuration > 1440 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "限流周期必须在 0-1440 分钟之间",
+		})
+		return
+	}
+
+	// 如果启用了限流，确保配置值有效
+	if token.RateLimitEnabled {
+		if token.RateLimitTotalCount == 0 || token.RateLimitSuccessCount == 0 || token.RateLimitDuration == 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "启用令牌限流时，所有配置值必须大于 0",
+			})
+			return
+		}
+	}
+
+	// 检查用户角色限制
+	userId := c.GetInt("id")
+	user, _ := model.GetUserById(userId, false)
+	if user != nil && user.Role == common.RoleCommonUser {
+		if token.RateLimitTotalCount > 1000 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "普通用户的令牌限流配置不能超过 1000 次/分钟",
+			})
+			return
+		}
+	}
+
 	key, err := common.GenerateKey()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -159,20 +207,30 @@ func AddToken(c *gin.Context) {
 		return
 	}
 	cleanToken := model.Token{
-		UserId:             c.GetInt("id"),
-		Name:               token.Name,
-		Key:                key,
-		CreatedTime:        common.GetTimestamp(),
-		AccessedTime:       common.GetTimestamp(),
-		ExpiredTime:        token.ExpiredTime,
-		RemainQuota:        token.RemainQuota,
-		UnlimitedQuota:     token.UnlimitedQuota,
-		ModelLimitsEnabled: token.ModelLimitsEnabled,
-		ModelLimits:        token.ModelLimits,
-		AllowIps:           token.AllowIps,
-		Group:              token.Group,
-		CrossGroupRetry:    token.CrossGroupRetry,
+		UserId:                userId,
+		Name:                  token.Name,
+		Key:                   key,
+		CreatedTime:           common.GetTimestamp(),
+		AccessedTime:          common.GetTimestamp(),
+		ExpiredTime:           token.ExpiredTime,
+		RemainQuota:           token.RemainQuota,
+		UnlimitedQuota:        token.UnlimitedQuota,
+		ModelLimitsEnabled:    token.ModelLimitsEnabled,
+		ModelLimits:           token.ModelLimits,
+		AllowIps:              token.AllowIps,
+		Group:                 token.Group,
+		CrossGroupRetry:       token.CrossGroupRetry,
+		RateLimitEnabled:      token.RateLimitEnabled,
+		RateLimitTotalCount:   token.RateLimitTotalCount,
+		RateLimitSuccessCount: token.RateLimitSuccessCount,
+		RateLimitDuration:     token.RateLimitDuration,
 	}
+
+	// 配置合理性检查（记录警告但不阻止）
+	if cleanToken.RateLimitTotalCount > 1000 {
+		common.SysLog("High rate limit configured: token_name=" + cleanToken.Name + ", count=" + strconv.Itoa(cleanToken.RateLimitTotalCount))
+	}
+
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)
@@ -218,9 +276,13 @@ func UpdateToken(c *gin.Context) {
 	}
 	cleanToken, err := model.GetTokenByIds(token.Id, userId)
 	if err != nil {
-		common.ApiError(c, err)
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "令牌不存在或无权访问",
+		})
 		return
 	}
+
 	if token.Status == common.TokenStatusEnabled {
 		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
 			c.JSON(http.StatusOK, gin.H{
@@ -237,9 +299,56 @@ func UpdateToken(c *gin.Context) {
 			return
 		}
 	}
+
 	if statusOnly != "" {
 		cleanToken.Status = token.Status
 	} else {
+		// 验证速率限制配置 - 无论是否启用都要验证
+		if token.RateLimitTotalCount < 0 || token.RateLimitTotalCount > 10000 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "总请求数必须在 0-10000 之间",
+			})
+			return
+		}
+		if token.RateLimitSuccessCount < 0 || token.RateLimitSuccessCount > token.RateLimitTotalCount {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "成功请求数必须在 0 到总请求数之间",
+			})
+			return
+		}
+		if token.RateLimitDuration < 0 || token.RateLimitDuration > 1440 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "限流周期必须在 0-1440 分钟之间",
+			})
+			return
+		}
+
+		// 如果启用了限流，确保配置值有效
+		if token.RateLimitEnabled {
+			if token.RateLimitTotalCount == 0 || token.RateLimitSuccessCount == 0 || token.RateLimitDuration == 0 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "启用令牌限流时，所有配置值必须大于 0",
+				})
+				return
+			}
+		}
+
+		// 检查用户角色限制
+		user, _ := model.GetUserById(userId, false)
+		if user != nil && user.Role == common.RoleCommonUser {
+			if token.RateLimitTotalCount > 1000 {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "普通用户的令牌限流配置不能超过 1000 次/分钟",
+				})
+				return
+			}
+		}
+
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime
@@ -250,6 +359,15 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		cleanToken.RateLimitEnabled = token.RateLimitEnabled
+		cleanToken.RateLimitTotalCount = token.RateLimitTotalCount
+		cleanToken.RateLimitSuccessCount = token.RateLimitSuccessCount
+		cleanToken.RateLimitDuration = token.RateLimitDuration
+
+		// 配置合理性检查（记录警告但不阻止）
+		if cleanToken.RateLimitTotalCount > 1000 {
+			common.SysLog("High rate limit configured: token_id=" + strconv.Itoa(cleanToken.Id) + ", count=" + strconv.Itoa(cleanToken.RateLimitTotalCount))
+		}
 	}
 	err = cleanToken.Update()
 	if err != nil {

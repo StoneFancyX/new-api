@@ -2182,6 +2182,27 @@
     "默认补全倍率": "Default completion ratio",
     "跨分组重试": "Cross-group retry",
     "跨分组": "Cross-group",
-    "开启后，当前分组渠道失败时会按顺序尝试下一个分组的渠道": "After enabling, when the current group channel fails, it will try the next group's channel in order"
+    "开启后，当前分组渠道失败时会按顺序尝试下一个分组的渠道": "After enabling, when the current group channel fails, it will try the next group's channel in order",
+    "速率限制": "Rate Limit",
+    "设置令牌级别的独立速率限制": "Set independent rate limit for token",
+    "启用令牌级别限流": "Enable Token-Level Rate Limit",
+    "启用后，此令牌将使用独立的速率限制配置，不受分组和全局配置影响": "When enabled, this token will use independent rate limit configuration, not affected by group and global settings",
+    "总请求数限制": "Total Request Limit",
+    "请输入总请求数": "Please enter total request count",
+    "必须在 0-10000 之间": "Must be between 0-10000",
+    "每个周期内允许的最大请求总数（包括成功和失败）": "Maximum total requests allowed per period (including success and failure)",
+    "成功请求数限制": "Success Request Limit",
+    "请输入成功请求数": "Please enter success request count",
+    "必须大于等于 0": "Must be greater than or equal to 0",
+    "成功请求数不能超过总请求数": "Success request count cannot exceed total request count",
+    "每个周期内允许的最大成功请求数": "Maximum successful requests allowed per period",
+    "限流周期（分钟）": "Rate Limit Period (Minutes)",
+    "请输入限流周期": "Please enter rate limit period",
+    "必须在 0-1440 分钟之间": "Must be between 0-1440 minutes",
+    "限流的时间窗口，单位为分钟（1440分钟=24小时）": "Rate limit time window in minutes (1440 minutes = 24 hours)",
+    "快捷设置": "Quick Settings",
+    "1分钟/60次": "1 min / 60 times",
+    "5分钟/300次": "5 min / 300 times",
+    "10分钟/600次": "10 min / 600 times"
   }
 }

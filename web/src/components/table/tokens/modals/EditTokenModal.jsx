@@ -75,6 +75,10 @@ const EditTokenModal = (props) => {
     group: '',
     cross_group_retry: false,
     tokenCount: 1,
+    rate_limit_enabled: false,
+    rate_limit_total_count: 60,
+    rate_limit_success_count: 60,
+    rate_limit_duration: 1,
   });
 
   const handleCancel = () => {
@@ -95,6 +99,15 @@ const EditTokenModal = (props) => {
     } else {
       formApiRef.current.setValue('expired_time', -1);
     }
+  };
+
+  const setRateLimit = (duration, totalCount, successCount) => {
+    if (!formApiRef.current) return;
+    formApiRef.current.setValues({
+      rate_limit_duration: duration,
+      rate_limit_total_count: totalCount,
+      rate_limit_success_count: successCount,
+    });
   };
 
   const loadModels = async () => {
@@ -566,6 +579,122 @@ const EditTokenModal = (props) => {
                       style={{ width: '100%' }}
                     />
                   </Col>
+                </Row>
+              </Card>
+
+              {/* 速率限制 */}
+              <Card className='!rounded-2xl shadow-sm border-0'>
+                <div className='flex items-center mb-2'>
+                  <Avatar
+                    size='small'
+                    color='orange'
+                    className='mr-2 shadow-md'
+                  >
+                    <IconCreditCard size={16} />
+                  </Avatar>
+                  <div>
+                    <Text className='text-lg font-medium'>{t('速率限制')}</Text>
+                    <div className='text-xs text-gray-600'>
+                      {t('设置令牌级别的独立速率限制')}
+                    </div>
+                  </div>
+                </div>
+                <Row gutter={12}>
+                  <Col span={24}>
+                    <Form.Switch
+                      field='rate_limit_enabled'
+                      label={t('启用令牌级别限流')}
+                      size='default'
+                      extraText={t(
+                        '启用后，此令牌将使用独立的速率限制配置，不受分组和全局配置影响',
+                      )}
+                    />
+                  </Col>
+                  {values.rate_limit_enabled && (
+                    <>
+                      <Col span={24}>
+                        <Form.InputNumber
+                          field='rate_limit_total_count'
+                          label={t('总请求数限制')}
+                          placeholder={t('请输入总请求数')}
+                          min={0}
+                          max={10000}
+                          rules={[
+                            { required: true, message: t('请输入总请求数') },
+                            { type: 'number', min: 0, max: 10000, message: t('必须在 0-10000 之间') }
+                          ]}
+                          extraText={t('每个周期内允许的最大请求总数（包括成功和失败）')}
+                          style={{ width: '100%' }}
+                        />
+                      </Col>
+                      <Col span={24}>
+                        <Form.InputNumber
+                          field='rate_limit_success_count'
+                          label={t('成功请求数限制')}
+                          placeholder={t('请输入成功请求数')}
+                          min={0}
+                          max={10000}
+                          rules={[
+                            { required: true, message: t('请输入成功请求数') },
+                            { type: 'number', min: 0, message: t('必须大于等于 0') },
+                            {
+                              validator: (rule, value) => {
+                                const totalCount = formApiRef.current?.getValue('rate_limit_total_count') || 0;
+                                if (value > totalCount) {
+                                  return Promise.reject(t('成功请求数不能超过总请求数'));
+                                }
+                                return Promise.resolve();
+                              }
+                            }
+                          ]}
+                          extraText={t('每个周期内允许的最大成功请求数')}
+                          style={{ width: '100%' }}
+                        />
+                      </Col>
+                      <Col span={24}>
+                        <Form.InputNumber
+                          field='rate_limit_duration'
+                          label={t('限流周期（分钟）')}
+                          placeholder={t('请输入限流周期')}
+                          min={0}
+                          max={1440}
+                          rules={[
+                            { required: true, message: t('请输入限流周期') },
+                            { type: 'number', min: 0, max: 1440, message: t('必须在 0-1440 分钟之间') }
+                          ]}
+                          extraText={t('限流的时间窗口，单位为分钟（1440分钟=24小时）')}
+                          style={{ width: '100%' }}
+                        />
+                      </Col>
+                      <Col span={24}>
+                        <Form.Slot label={t('快捷设置')}>
+                          <Space wrap>
+                            <Button
+                              theme='light'
+                              type='tertiary'
+                              onClick={() => setRateLimit(1, 60, 60)}
+                            >
+                              {t('1分钟/60次')}
+                            </Button>
+                            <Button
+                              theme='light'
+                              type='tertiary'
+                              onClick={() => setRateLimit(5, 300, 300)}
+                            >
+                              {t('5分钟/300次')}
+                            </Button>
+                            <Button
+                              theme='light'
+                              type='tertiary'
+                              onClick={() => setRateLimit(10, 600, 600)}
+                            >
+                              {t('10分钟/600次')}
+                            </Button>
+                          </Space>
+                        </Form.Slot>
+                      </Col>
+                    </>
+                  )}
                 </Row>
               </Card>
             </div>

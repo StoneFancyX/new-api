@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
 
@@ -74,73 +73,82 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 	rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
 }
 
-// Redis限流处理器
-func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
+// Redis限流处理器 - 使用Lua脚本确保原子性
+func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int, limitKey, successKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
 		ctx := context.Background()
 		rdb := common.RDB
 
-		// 1. 检查成功请求数限制
-		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, userId)
-		allowed, err := checkRedisRateLimit(ctx, rdb, successKey, successMaxCount, duration)
+		// Lua脚本：原子性地检查和增加计数器
+		luaScript := `
+		local key = KEYS[1]
+		local limit = tonumber(ARGV[1])
+		local ttl = tonumber(ARGV[2])
+
+		if limit == 0 then
+			return 1
+		end
+
+		local current = redis.call('GET', key)
+
+		if current == false then
+			redis.call('SET', key, 1, 'EX', ttl)
+			return 1
+		end
+
+		current = tonumber(current)
+		if current < limit then
+			redis.call('INCR', key)
+			redis.call('EXPIRE', key, ttl)
+			return current + 1
+		else
+			return -1
+		end
+		`
+
+		// 1. 检查总请求数限制
+		ttl := duration * 2 // TTL 设置为 duration 的 2 倍
+		result, err := rdb.Eval(ctx, luaScript, []string{limitKey}, totalMaxCount, ttl).Result()
 		if err != nil {
-			fmt.Println("检查成功请求数限制失败:", err.Error())
+			common.SysLog("Rate limit check failed: " + err.Error())
 			abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
 			return
 		}
-		if !allowed {
-			abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount))
+
+		if result.(int64) == -1 {
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests,
+				fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次", duration/60, totalMaxCount))
 			return
 		}
 
-		//2.检查总请求数限制并记录总请求（当totalMaxCount为0时会自动跳过，使用令牌桶限流器
-		if totalMaxCount > 0 {
-			totalKey := fmt.Sprintf("rateLimit:%s", userId)
-			// 初始化
-			tb := limiter.New(ctx, rdb)
-			allowed, err = tb.Allow(
-				ctx,
-				totalKey,
-				limiter.WithCapacity(int64(totalMaxCount)*duration),
-				limiter.WithRate(int64(totalMaxCount)),
-				limiter.WithRequested(duration),
-			)
+		// 2. 处理请求
+		c.Next()
 
+		// 3. 如果请求成功，检查并记录成功请求数
+		if c.Writer.Status() < 400 {
+			result, err := rdb.Eval(ctx, luaScript, []string{successKey}, successMaxCount, ttl).Result()
 			if err != nil {
-				fmt.Println("检查总请求数限制失败:", err.Error())
-				abortWithOpenAiMessage(c, http.StatusInternalServerError, "rate_limit_check_failed")
+				common.SysLog("Success rate limit check failed: " + err.Error())
 				return
 			}
 
-			if !allowed {
-				abortWithOpenAiMessage(c, http.StatusTooManyRequests, fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount))
+			if result.(int64) == -1 {
+				// 成功请求数已达上限，但请求已经处理完成，只记录日志
+				common.SysLog(fmt.Sprintf("Success rate limit exceeded for key: %s", successKey))
 			}
-		}
-
-		// 4. 处理请求
-		c.Next()
-
-		// 5. 如果请求成功，记录成功请求
-		if c.Writer.Status() < 400 {
-			recordRedisRequest(ctx, rdb, successKey, successMaxCount)
 		}
 	}
 }
 
 // 内存限流处理器
-func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) gin.HandlerFunc {
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
+func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int, limitKey, successKey string) gin.HandlerFunc {
+	inMemoryRateLimiter.Init(time.Duration(duration) * time.Second)
 
 	return func(c *gin.Context) {
-		userId := strconv.Itoa(c.GetInt("id"))
-		totalKey := ModelRequestRateLimitCountMark + userId
-		successKey := ModelRequestRateLimitSuccessCountMark + userId
-
 		// 1. 检查总请求数限制（当totalMaxCount为0时跳过）
-		if totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, totalMaxCount, duration) {
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+		if totalMaxCount > 0 && !inMemoryRateLimiter.Request(limitKey, totalMaxCount, duration) {
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests,
+				fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次", duration/60, totalMaxCount))
 			return
 		}
 
@@ -148,8 +156,8 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 		// 使用一个临时key来检查限制，这样可以避免实际记录
 		checkKey := successKey + "_check"
 		if !inMemoryRateLimiter.Request(checkKey, successMaxCount, duration) {
-			c.Status(http.StatusTooManyRequests)
-			c.Abort()
+			abortWithOpenAiMessage(c, http.StatusTooManyRequests,
+				fmt.Sprintf("您已达到成功请求数限制：%d分钟内最多成功请求%d次", duration/60, successMaxCount))
 			return
 		}
 
@@ -172,29 +180,67 @@ func ModelRequestRateLimit() func(c *gin.Context) {
 			return
 		}
 
-		// 计算限流参数
-		duration := int64(setting.ModelRequestRateLimitDurationMinutes * 60)
-		totalMaxCount := setting.ModelRequestRateLimitCount
-		successMaxCount := setting.ModelRequestRateLimitSuccessCount
+		var totalMaxCount, successMaxCount int
+		var duration int64
+		var limitKey, successKey string
 
-		// 获取分组
-		group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-		if group == "" {
-			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-		}
+		// 获取令牌级别的速率限制配置
+		tokenRateLimitEnabled := common.GetContextKeyBool(c, constant.ContextKeyTokenRateLimitEnabled)
 
-		//获取分组的限流配置
-		groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
-		if found {
-			totalMaxCount = groupTotalCount
-			successMaxCount = groupSuccessCount
+		if tokenRateLimitEnabled {
+			// 优先级1: 使用令牌级别配置
+			totalMaxCount = common.GetContextKeyInt(c, constant.ContextKeyTokenRateLimitTotalCount)
+			successMaxCount = common.GetContextKeyInt(c, constant.ContextKeyTokenRateLimitSuccessCount)
+			durationMinutes := common.GetContextKeyInt(c, constant.ContextKeyTokenRateLimitDuration)
+			tokenId := c.GetInt("token_id")
+
+			// 强制检查：如果启用了令牌限流，Context中必须有完整配置
+			if totalMaxCount <= 0 || successMaxCount <= 0 || durationMinutes <= 0 || tokenId <= 0 {
+				common.SysLog(fmt.Sprintf("Invalid token rate limit config: tokenId=%d, total=%d, success=%d, duration=%d",
+					tokenId, totalMaxCount, successMaxCount, durationMinutes))
+				abortWithOpenAiMessage(c, http.StatusInternalServerError, "令牌限流配置异常，请联系管理员")
+				return
+			}
+
+			duration = int64(durationMinutes * 60)
+			// 使用类型安全的方式生成 Key
+			limitKey = fmt.Sprintf("rateLimit:token:%d", tokenId)
+			successKey = fmt.Sprintf("rateLimit:token:%d:success", tokenId)
+
+			// 记录高配额警告
+			if totalMaxCount > 1000 {
+				common.SysLog(fmt.Sprintf("High rate limit configured: token_id=%d, count=%d", tokenId, totalMaxCount))
+			}
+		} else {
+			// 优先级2: 使用分组配置或全局配置
+			duration = int64(setting.ModelRequestRateLimitDurationMinutes * 60)
+			totalMaxCount = setting.ModelRequestRateLimitCount
+			successMaxCount = setting.ModelRequestRateLimitSuccessCount
+
+			// 获取分组
+			group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+			if group == "" {
+				group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+			}
+
+			// 获取分组的限流配置
+			groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
+			if found {
+				totalMaxCount = groupTotalCount
+				successMaxCount = groupSuccessCount
+			}
+
+			// 使用用户级别的 Key
+			userId := strconv.Itoa(c.GetInt("id"))
+			limitKey = fmt.Sprintf("rateLimit:user:%s", userId)
+			successKey = fmt.Sprintf("rateLimit:user:%s:success", userId)
 		}
 
 		// 根据存储类型选择并执行限流处理器
 		if common.RedisEnabled {
-			redisRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
+			redisRateLimitHandler(duration, totalMaxCount, successMaxCount, limitKey, successKey)(c)
 		} else {
-			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
+			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount, limitKey, successKey)(c)
 		}
 	}
 }

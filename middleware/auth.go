@@ -318,6 +318,11 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	// 设置令牌级别速率限制配置
+	common.SetContextKey(c, constant.ContextKeyTokenRateLimitEnabled, token.RateLimitEnabled)
+	common.SetContextKey(c, constant.ContextKeyTokenRateLimitTotalCount, token.RateLimitTotalCount)
+	common.SetContextKey(c, constant.ContextKeyTokenRateLimitSuccessCount, token.RateLimitSuccessCount)
+	common.SetContextKey(c, constant.ContextKeyTokenRateLimitDuration, token.RateLimitDuration)
 	if len(parts) > 1 {
 		if model.IsAdmin(token.UserId) {
 			c.Set("specific_channel_id", parts[1])
